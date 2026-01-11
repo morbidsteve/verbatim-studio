@@ -116,6 +116,27 @@ Verbatim Studio is designed for security-sensitive environments:
 - **Audit logging**: Complete activity tracking (Enterprise)
 - **RBAC**: Fine-grained access control (Enterprise)
 
+## Development Status
+
+See [docs/IMPLEMENTATION_PLAN.md](./docs/IMPLEMENTATION_PLAN.md) for the complete implementation roadmap.
+
+### Completed Phases
+
+- **Phase 1**: Foundation & Project Scaffolding ✅
+- **Phase 2**: Core Transcription Engine ✅
+- **Phase 3**: Database & Data Layer ✅
+- **Phase 4**: Desktop App UI (in progress)
+- **Phase 5**: Enterprise Backend (in progress)
+
+### Current State
+
+The desktop app now connects to the real FastAPI backend with:
+- User authentication (register/login)
+- Project management (CRUD)
+- File upload for recordings
+- Live audio recording interface
+- SQLite database for Basic tier
+
 ## License
 
 Proprietary software. See [LICENSE](./LICENSE) for details.
