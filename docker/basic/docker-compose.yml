@@ -1,0 +1,88 @@
+# Verbatim Studio - Basic Tier
+# This runs locally on the user's machine, managed by the Electron app
+
+version: "3.9"
+
+services:
+  # WhisperX for file transcription
+  whisper-service:
+    image: verbatim/whisper-service:latest
+    build:
+      context: ../../services/whisper-service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    volumes:
+      - whisper-models:/app/models
+      - uploads:/app/uploads
+    environment:
+      - MODEL_SIZE=small
+      - DEVICE=auto
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # WhisperLive for real-time transcription (GPU)
+  whisper-live:
+    image: verbatim/whisper-live:latest
+    build:
+      context: ../../services/whisper-live
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    volumes:
+      - whisper-models:/app/models
+    environment:
+      - MODEL_SIZE=small
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Speaker diarization
+  diarization:
+    image: verbatim/diarization:latest
+    build:
+      context: ../../services/diarization
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8000"
+    volumes:
+      - diarization-models:/app/models
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Ollama for local LLM
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  whisper-models:
+  diarization-models:
+  ollama-data:
+  uploads:

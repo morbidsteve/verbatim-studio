@@ -1,0 +1,48 @@
+# Verbatim Studio - Basic Tier (CPU/ARM)
+# For systems without NVIDIA GPU
+
+version: "3.9"
+
+services:
+  # whisper.cpp for CPU/ARM transcription
+  whisper-cpp:
+    image: verbatim/whisper-cpp:latest
+    build:
+      context: ../../services/whisper-cpp
+      dockerfile: Dockerfile.cpu
+    ports:
+      - "8001:8000"
+    volumes:
+      - whisper-models:/app/models
+      - uploads:/app/uploads
+    environment:
+      - MODEL_SIZE=small
+      - THREADS=4
+
+  # Speaker diarization (CPU)
+  diarization:
+    image: verbatim/diarization:cpu
+    build:
+      context: ../../services/diarization
+      dockerfile: Dockerfile.cpu
+    ports:
+      - "8003:8000"
+    volumes:
+      - diarization-models:/app/models
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - DEVICE=cpu
+
+  # Ollama for local LLM
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  whisper-models:
+  diarization-models:
+  ollama-data:
+  uploads:

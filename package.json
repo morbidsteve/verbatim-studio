@@ -1,0 +1,60 @@
+{
+  "name": "verbatim-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy-first transcription platform",
+  "keywords": [
+    "transcription",
+    "speech-to-text",
+    "diarization",
+    "whisper",
+    "electron"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Verbatim Studio",
+  "type": "module",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "dev:desktop": "turbo run dev --filter=@verbatim/desktop",
+    "dev:web": "turbo run dev --filter=@verbatim/web",
+    "dev:server": "turbo run dev --filter=@verbatim/server",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint:fix",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css,scss}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css,scss}\"",
+    "test": "turbo run test",
+    "test:watch": "turbo run test:watch",
+    "test:coverage": "turbo run test:coverage",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rm -rf node_modules .turbo",
+    "docker:up": "docker compose -f docker/basic/docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker/basic/docker-compose.yml down",
+    "docker:up:enterprise": "docker compose -f docker/enterprise/docker-compose.yml up -d",
+    "docker:down:enterprise": "docker compose -f docker/enterprise/docker-compose.yml down",
+    "docker:logs": "docker compose -f docker/basic/docker-compose.yml logs -f",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.2.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.3.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,css,scss}": [
+      "prettier --write"
+    ]
+  }
+}

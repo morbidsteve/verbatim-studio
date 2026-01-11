@@ -1,0 +1,176 @@
+# Verbatim Studio - Enterprise Tier
+# Full server deployment with PostgreSQL, Redis, and all services
+
+version: "3.9"
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=verbatim
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-verbatim}
+      - POSTGRES_DB=verbatim
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verbatim"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and job queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI server
+  api:
+    image: verbatim/api:latest
+    build:
+      context: ../../apps/server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/app/data/uploads
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://verbatim:${POSTGRES_PASSWORD:-verbatim}@postgres:5432/verbatim
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-change-me}
+      - DEBUG=${DEBUG:-false}
+      - WHISPER_SERVICE_URL=http://whisper-service:8000
+      - DIARIZATION_SERVICE_URL=http://diarization:8000
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Celery worker for background jobs
+  celery-worker:
+    image: verbatim/api:latest
+    command: celery -A src.celery_app worker --loglevel=info
+    volumes:
+      - uploads:/app/data/uploads
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://verbatim:${POSTGRES_PASSWORD:-verbatim}@postgres:5432/verbatim
+      - REDIS_URL=redis://redis:6379/0
+      - WHISPER_SERVICE_URL=http://whisper-service:8000
+      - DIARIZATION_SERVICE_URL=http://diarization:8000
+    depends_on:
+      - api
+      - redis
+
+  # Celery beat for scheduled tasks
+  celery-beat:
+    image: verbatim/api:latest
+    command: celery -A src.celery_app beat --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  # WhisperX service
+  whisper-service:
+    image: verbatim/whisper-service:latest
+    build:
+      context: ../../services/whisper-service
+      dockerfile: Dockerfile
+    volumes:
+      - whisper-models:/app/models
+      - uploads:/app/uploads
+    environment:
+      - MODEL_SIZE=${WHISPER_MODEL:-small}
+      - DEVICE=auto
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # WhisperLive for real-time
+  whisper-live:
+    image: verbatim/whisper-live:latest
+    build:
+      context: ../../services/whisper-live
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    volumes:
+      - whisper-models:/app/models
+    environment:
+      - MODEL_SIZE=${WHISPER_MODEL:-small}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Speaker diarization
+  diarization:
+    image: verbatim/diarization:latest
+    build:
+      context: ../../services/diarization
+      dockerfile: Dockerfile
+    volumes:
+      - diarization-models:/app/models
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Ollama
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Web UI (optional)
+  web:
+    image: verbatim/web:latest
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  redis-data:
+  whisper-models:
+  diarization-models:
+  ollama-data:
+  uploads:
