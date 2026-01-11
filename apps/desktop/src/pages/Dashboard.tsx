@@ -4,9 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../stores/project-store';
 import { useAppStore } from '../stores/app-store';
 
-function formatDuration(ms: number): string {
-  const hours = Math.floor(ms / 3600000);
-  const minutes = Math.floor((ms % 3600000) / 60000);
+function formatDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }

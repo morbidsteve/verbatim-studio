@@ -32,13 +32,14 @@ import {
   Archive,
   Trash2,
   Edit,
+  Loader2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjectStore, type Project } from '../stores/project-store';
 
-function formatDuration(ms: number): string {
-  const hours = Math.floor(ms / 3600000);
-  const minutes = Math.floor((ms % 3600000) / 60000);
+function formatDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }
@@ -66,11 +67,17 @@ export function Projects() {
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const projects = useProjectStore((state) => state.projects);
-  const addProject = useProjectStore((state) => state.addProject);
+  const projectsLoading = useProjectStore((state) => state.projectsLoading);
+  const createProject = useProjectStore((state) => state.createProject);
   const updateProject = useProjectStore((state) => state.updateProject);
   const deleteProject = useProjectStore((state) => state.deleteProject);
+  const archiveProject = useProjectStore((state) => state.archiveProject);
+  const restoreProject = useProjectStore((state) => state.restoreProject);
+  const error = useProjectStore((state) => state.error);
 
   // Filter projects
   const filteredProjects = useMemo(() => {
@@ -91,50 +98,67 @@ export function Projects() {
     });
   }, [projects, searchQuery, showArchived]);
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
     if (!newProjectName.trim()) return;
 
-    const newProject: Project = {
-      id: `proj-${Date.now()}`,
-      name: newProjectName.trim(),
-      description: newProjectDescription.trim() || undefined,
-      status: 'active',
-      recordingCount: 0,
-      totalDuration: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    addProject(newProject);
-    setNewProjectName('');
-    setNewProjectDescription('');
-    setCreateDialogOpen(false);
-    navigate(`/projects/${newProject.id}`);
+    setIsCreating(true);
+    try {
+      const project = await createProject({
+        name: newProjectName.trim(),
+        description: newProjectDescription.trim() || undefined,
+      });
+      setNewProjectName('');
+      setNewProjectDescription('');
+      setCreateDialogOpen(false);
+      navigate(`/projects/${project.id}`);
+    } catch {
+      // Error handled in store
+    } finally {
+      setIsCreating(false);
+    }
   };
 
-  const handleUpdateProject = () => {
+  const handleUpdateProject = async () => {
     if (!editingProject || !newProjectName.trim()) return;
 
-    updateProject(editingProject.id, {
-      name: newProjectName.trim(),
-      description: newProjectDescription.trim() || undefined,
-    });
-
-    setEditingProject(null);
-    setNewProjectName('');
-    setNewProjectDescription('');
+    setIsUpdating(true);
+    try {
+      await updateProject(editingProject.id, {
+        name: newProjectName.trim(),
+        description: newProjectDescription.trim() || undefined,
+      });
+      setEditingProject(null);
+      setNewProjectName('');
+      setNewProjectDescription('');
+    } catch {
+      // Error handled in store
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
-  const handleArchiveProject = (projectId: string) => {
-    updateProject(projectId, { status: 'archived' });
+  const handleArchiveProject = async (projectId: string) => {
+    try {
+      await archiveProject(projectId);
+    } catch {
+      // Error handled in store
+    }
   };
 
-  const handleRestoreProject = (projectId: string) => {
-    updateProject(projectId, { status: 'active' });
+  const handleRestoreProject = async (projectId: string) => {
+    try {
+      await restoreProject(projectId);
+    } catch {
+      // Error handled in store
+    }
   };
 
-  const handleDeleteProject = (projectId: string) => {
-    deleteProject(projectId);
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      await deleteProject(projectId);
+    } catch {
+      // Error handled in store
+    }
   };
 
   const openEditDialog = (project: Project) => {
@@ -142,6 +166,14 @@ export function Projects() {
     setNewProjectName(project.name);
     setNewProjectDescription(project.description || '');
   };
+
+  if (projectsLoading && projects.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
@@ -188,13 +220,25 @@ export function Projects() {
                   rows={3}
                 />
               </div>
+              {error && (
+                <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-3 rounded-md">
+                  {error}
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleCreateProject} disabled={!newProjectName.trim()}>
-                Create Project
+              <Button onClick={handleCreateProject} disabled={!newProjectName.trim() || isCreating}>
+                {isCreating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create Project'
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -368,13 +412,25 @@ export function Projects() {
                 rows={3}
               />
             </div>
+            {error && (
+              <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-3 rounded-md">
+                {error}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditingProject(null)}>
               Cancel
             </Button>
-            <Button onClick={handleUpdateProject} disabled={!newProjectName.trim()}>
-              Save Changes
+            <Button onClick={handleUpdateProject} disabled={!newProjectName.trim() || isUpdating}>
+              {isUpdating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Changes'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

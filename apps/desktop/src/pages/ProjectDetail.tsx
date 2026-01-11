@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -39,14 +39,14 @@ import {
 } from 'lucide-react';
 import { useProjectStore, type Recording } from '../stores/project-store';
 
-function formatDuration(ms: number): string {
-  const hours = Math.floor(ms / 3600000);
-  const minutes = Math.floor((ms % 3600000) / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
+function formatDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
   if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -75,73 +75,65 @@ export function ProjectDetail() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [recordingToDelete, setRecordingToDelete] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const projects = useProjectStore((state) => state.projects);
   const recordings = useProjectStore((state) => state.recordings);
-  const addRecording = useProjectStore((state) => state.addRecording);
+  const recordingsLoading = useProjectStore((state) => state.recordingsLoading);
+  const fetchRecordings = useProjectStore((state) => state.fetchRecordings);
+  const uploadRecording = useProjectStore((state) => state.uploadRecording);
   const deleteRecording = useProjectStore((state) => state.deleteRecording);
-  const updateProject = useProjectStore((state) => state.updateProject);
+  const startTranscription = useProjectStore((state) => state.startTranscription);
 
   const project = projects.find((p) => p.id === projectId);
   const projectRecordings = recordings.get(projectId || '') || [];
 
-  const handleUpload = useCallback(async () => {
-    if (!projectId || typeof window.electronAPI === 'undefined') return;
+  // Fetch recordings when project changes
+  useEffect(() => {
+    if (projectId) {
+      fetchRecordings(projectId);
+    }
+  }, [projectId, fetchRecordings]);
 
+  const handleFileUpload = useCallback(async (files: FileList | null) => {
+    if (!projectId || !files || files.length === 0) return;
+
+    setUploading(true);
     try {
-      const result = await window.electronAPI.file.openMultipleDialog({
-        title: 'Select audio or video files',
-        filters: [
-          { name: 'Audio Files', extensions: ['wav', 'mp3', 'm4a', 'flac', 'ogg', 'aac'] },
-          { name: 'Video Files', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm'] },
-          { name: 'All Files', extensions: ['*'] },
-        ],
-      });
-
-      if (result.canceled || result.filePaths.length === 0) return;
-
-      setUploading(true);
-
-      for (const filePath of result.filePaths) {
-        const audioInfo = await window.electronAPI.audio.getInfo(filePath);
-
-        const newRecording: Recording = {
-          id: `rec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          projectId,
-          name: audioInfo.name,
-          sourceType: 'upload',
-          mediaType: audioInfo.format === 'mp4' || audioInfo.format === 'mov' ? 'video' : 'audio',
-          format: audioInfo.format,
-          duration: audioInfo.duration || 0,
-          size: audioInfo.size,
-          storagePath: filePath,
-          transcriptionStatus: 'pending',
-          transcriptionProgress: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        addRecording(newRecording);
+      for (const file of Array.from(files)) {
+        await uploadRecording(projectId, file, file.name);
       }
-
-      // Update project stats
-      const updatedRecordings = recordings.get(projectId) || [];
-      updateProject(projectId, {
-        recordingCount: updatedRecordings.length + result.filePaths.length,
-      });
     } catch (error) {
       console.error('Failed to upload files:', error);
     } finally {
       setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
-  }, [projectId, addRecording, updateProject, recordings]);
+  }, [projectId, uploadRecording]);
 
-  const handleDeleteRecording = () => {
-    if (!recordingToDelete || !projectId) return;
-    deleteRecording(recordingToDelete);
-    updateProject(projectId, { recordingCount: Math.max(0, projectRecordings.length - 1) });
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleDeleteRecording = async () => {
+    if (!recordingToDelete) return;
+    try {
+      await deleteRecording(recordingToDelete);
+    } catch {
+      // Error handled in store
+    }
     setRecordingToDelete(null);
     setDeleteDialogOpen(false);
+  };
+
+  const handleStartTranscription = async (recordingId: string) => {
+    try {
+      await startTranscription(recordingId, { model: 'small', diarize: true });
+    } catch {
+      // Error handled in store
+    }
   };
 
   const confirmDelete = (recordingId: string) => {
@@ -176,6 +168,16 @@ export function ProjectDetail() {
 
   return (
     <div className="p-6">
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="audio/*,video/*,.wav,.mp3,.m4a,.flac,.ogg,.aac,.mp4,.mov,.avi,.mkv,.webm"
+        className="hidden"
+        onChange={(e) => handleFileUpload(e.target.files)}
+      />
+
       {/* Header */}
       <div className="mb-6">
         <Button variant="ghost" className="mb-4 -ml-2" onClick={() => navigate('/projects')}>
@@ -190,11 +192,11 @@ export function ProjectDetail() {
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" className="gap-2" onClick={() => navigate('/recording')}>
+            <Button variant="outline" className="gap-2" onClick={() => navigate(`/recording?project=${projectId}`)}>
               <Mic className="h-4 w-4" />
               Record
             </Button>
-            <Button className="gap-2" onClick={handleUpload} disabled={uploading}>
+            <Button className="gap-2" onClick={handleUploadClick} disabled={uploading}>
               {uploading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
@@ -259,7 +261,11 @@ export function ProjectDetail() {
           <CardTitle>Recordings</CardTitle>
         </CardHeader>
         <CardContent>
-          {projectRecordings.length === 0 ? (
+          {recordingsLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : projectRecordings.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <FileAudio className="mb-4 h-12 w-12 text-muted-foreground" />
               <p className="text-lg font-medium">No recordings yet</p>
@@ -267,11 +273,11 @@ export function ProjectDetail() {
                 Upload audio files or start a live recording
               </p>
               <div className="mt-4 flex gap-2">
-                <Button variant="outline" className="gap-2" onClick={() => navigate('/recording')}>
+                <Button variant="outline" className="gap-2" onClick={() => navigate(`/recording?project=${projectId}`)}>
                   <Mic className="h-4 w-4" />
                   Record
                 </Button>
-                <Button className="gap-2" onClick={handleUpload}>
+                <Button className="gap-2" onClick={handleUploadClick}>
                   <Upload className="h-4 w-4" />
                   Upload
                 </Button>
@@ -335,6 +341,12 @@ export function ProjectDetail() {
                           <Play className="mr-2 h-4 w-4" />
                           Play
                         </DropdownMenuItem>
+                        {recording.transcriptionStatus === 'pending' && (
+                          <DropdownMenuItem onClick={() => handleStartTranscription(recording.id)}>
+                            <Loader2 className="mr-2 h-4 w-4" />
+                            Start Transcription
+                          </DropdownMenuItem>
+                        )}
                         {recording.transcriptionStatus === 'completed' && (
                           <DropdownMenuItem>
                             <Eye className="mr-2 h-4 w-4" />

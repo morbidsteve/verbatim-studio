@@ -1,8 +1,9 @@
 /**
- * Project state management.
+ * Project state management with API integration.
  */
 
 import { create } from 'zustand';
+import { apiClient, type Project as ApiProject, type Recording as ApiRecording } from '../lib/api-client';
 
 export interface Project {
   id: string;
@@ -10,7 +11,7 @@ export interface Project {
   description?: string;
   status: 'active' | 'archived' | 'deleted';
   recordingCount: number;
-  totalDuration: number; // milliseconds
+  totalDuration: number; // seconds
   createdAt: string;
   updatedAt: string;
 }
@@ -23,13 +24,46 @@ export interface Recording {
   sourceType: 'upload' | 'live';
   mediaType: 'audio' | 'video';
   format: string;
-  duration: number; // milliseconds
+  duration: number; // seconds
   size: number; // bytes
   storagePath: string;
   transcriptionStatus: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   transcriptionProgress: number;
   createdAt: string;
   updatedAt: string;
+}
+
+// Convert API response to local format
+function mapApiProject(p: ApiProject): Project {
+  return {
+    id: p.id,
+    name: p.name,
+    description: p.description || undefined,
+    status: p.status as Project['status'],
+    recordingCount: p.recording_count,
+    totalDuration: p.total_duration,
+    createdAt: p.created_at,
+    updatedAt: p.updated_at,
+  };
+}
+
+function mapApiRecording(r: ApiRecording): Recording {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    name: r.name,
+    description: r.description || undefined,
+    sourceType: r.source_type as Recording['sourceType'],
+    mediaType: r.media_type as Recording['mediaType'],
+    format: r.format,
+    duration: r.duration,
+    size: r.size,
+    storagePath: r.storage_path,
+    transcriptionStatus: r.transcription_status as Recording['transcriptionStatus'],
+    transcriptionProgress: r.transcription_progress,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 interface ProjectState {
@@ -42,28 +76,28 @@ interface ProjectState {
   // Loading states
   projectsLoading: boolean;
   recordingsLoading: boolean;
+  error: string | null;
 
-  // Actions
-  setProjects: (projects: Project[]) => void;
-  addProject: (project: Project) => void;
-  updateProject: (id: string, updates: Partial<Project>) => void;
-  deleteProject: (id: string) => void;
+  // Actions - API integrated
+  fetchProjects: (params?: { status?: string; search?: string }) => Promise<void>;
+  fetchRecordings: (projectId: string) => Promise<void>;
+  createProject: (data: { name: string; description?: string }) => Promise<Project>;
+  updateProject: (id: string, updates: { name?: string; description?: string; status?: string }) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
+  archiveProject: (id: string) => Promise<void>;
+  restoreProject: (id: string) => Promise<void>;
+
+  uploadRecording: (projectId: string, file: File, name?: string, description?: string) => Promise<Recording>;
+  updateRecording: (id: string, updates: { name?: string; description?: string }) => Promise<void>;
+  deleteRecording: (id: string) => Promise<void>;
+  startTranscription: (recordingId: string, options?: { model?: string; language?: string; diarize?: boolean }) => Promise<void>;
+
   selectProject: (id: string | null) => void;
-
-  setRecordings: (projectId: string, recordings: Recording[]) => void;
-  addRecording: (recording: Recording) => void;
-  updateRecording: (id: string, updates: Partial<Recording>) => void;
-  deleteRecording: (id: string) => void;
   selectRecording: (id: string | null) => void;
-
-  setProjectsLoading: (loading: boolean) => void;
-  setRecordingsLoading: (loading: boolean) => void;
-
-  // Mock data for demo
-  loadMockData: () => void;
+  clearError: () => void;
 }
 
-export const useProjectStore = create<ProjectState>()((set) => ({
+export const useProjectStore = create<ProjectState>()((set, get) => ({
   // Initial state
   projects: [],
   recordings: new Map(),
@@ -71,189 +105,219 @@ export const useProjectStore = create<ProjectState>()((set) => ({
   selectedRecordingId: null,
   projectsLoading: false,
   recordingsLoading: false,
+  error: null,
 
-  // Actions
-  setProjects: (projects) => set({ projects }),
+  // Fetch projects from API
+  fetchProjects: async (params) => {
+    set({ projectsLoading: true, error: null });
+    try {
+      const response = await apiClient.getProjects(params);
+      set({ projects: response.items.map(mapApiProject), projectsLoading: false });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to fetch projects', projectsLoading: false });
+    }
+  },
 
-  addProject: (project) =>
-    set((state) => ({ projects: [...state.projects, project] })),
+  // Fetch recordings for a project
+  fetchRecordings: async (projectId) => {
+    set({ recordingsLoading: true, error: null });
+    try {
+      const response = await apiClient.getRecordings(projectId);
+      const recordings = response.items.map(mapApiRecording);
+      set((state) => {
+        const newRecordings = new Map(state.recordings);
+        newRecordings.set(projectId, recordings);
+        return { recordings: newRecordings, recordingsLoading: false };
+      });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to fetch recordings', recordingsLoading: false });
+    }
+  },
 
-  updateProject: (id, updates) =>
-    set((state) => ({
-      projects: state.projects.map((p) =>
-        p.id === id ? { ...p, ...updates, updatedAt: new Date().toISOString() } : p
-      ),
-    })),
+  // Create a new project
+  createProject: async (data) => {
+    set({ error: null });
+    try {
+      const apiProject = await apiClient.createProject(data);
+      const project = mapApiProject(apiProject);
+      set((state) => ({ projects: [...state.projects, project] }));
+      return project;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Failed to create project';
+      set({ error });
+      throw new Error(error);
+    }
+  },
 
-  deleteProject: (id) =>
-    set((state) => ({
-      projects: state.projects.filter((p) => p.id !== id),
-      selectedProjectId: state.selectedProjectId === id ? null : state.selectedProjectId,
-    })),
+  // Update a project
+  updateProject: async (id, updates) => {
+    set({ error: null });
+    try {
+      const apiProject = await apiClient.updateProject(id, updates);
+      const project = mapApiProject(apiProject);
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === id ? project : p)),
+      }));
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to update project' });
+      throw err;
+    }
+  },
+
+  // Delete a project
+  deleteProject: async (id) => {
+    set({ error: null });
+    try {
+      await apiClient.deleteProject(id);
+      set((state) => ({
+        projects: state.projects.filter((p) => p.id !== id),
+        selectedProjectId: state.selectedProjectId === id ? null : state.selectedProjectId,
+      }));
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to delete project' });
+      throw err;
+    }
+  },
+
+  // Archive a project
+  archiveProject: async (id) => {
+    set({ error: null });
+    try {
+      await apiClient.archiveProject(id);
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === id ? { ...p, status: 'archived' as const, updatedAt: new Date().toISOString() } : p
+        ),
+      }));
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to archive project' });
+      throw err;
+    }
+  },
+
+  // Restore an archived project
+  restoreProject: async (id) => {
+    set({ error: null });
+    try {
+      await apiClient.restoreProject(id);
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === id ? { ...p, status: 'active' as const, updatedAt: new Date().toISOString() } : p
+        ),
+      }));
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to restore project' });
+      throw err;
+    }
+  },
+
+  // Upload a recording
+  uploadRecording: async (projectId, file, name, description) => {
+    set({ error: null });
+    try {
+      const apiRecording = await apiClient.uploadRecording(projectId, file, name, description);
+      const recording = mapApiRecording(apiRecording);
+      set((state) => {
+        const newRecordings = new Map(state.recordings);
+        const projectRecordings = newRecordings.get(projectId) || [];
+        newRecordings.set(projectId, [...projectRecordings, recording]);
+        return { recordings: newRecordings };
+      });
+      // Also refresh the project to get updated recording count
+      get().fetchProjects();
+      return recording;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Failed to upload recording';
+      set({ error });
+      throw new Error(error);
+    }
+  },
+
+  // Update a recording
+  updateRecording: async (id, updates) => {
+    set({ error: null });
+    try {
+      const apiRecording = await apiClient.updateRecording(id, updates);
+      const recording = mapApiRecording(apiRecording);
+      set((state) => {
+        const newRecordings = new Map(state.recordings);
+        for (const [projectId, recs] of newRecordings) {
+          const index = recs.findIndex((r) => r.id === id);
+          if (index !== -1) {
+            const updated = [...recs];
+            updated[index] = recording;
+            newRecordings.set(projectId, updated);
+            break;
+          }
+        }
+        return { recordings: newRecordings };
+      });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to update recording' });
+      throw err;
+    }
+  },
+
+  // Delete a recording
+  deleteRecording: async (id) => {
+    set({ error: null });
+    try {
+      await apiClient.deleteRecording(id);
+      set((state) => {
+        const newRecordings = new Map(state.recordings);
+        for (const [projectId, recs] of newRecordings) {
+          const filtered = recs.filter((r) => r.id !== id);
+          if (filtered.length !== recs.length) {
+            newRecordings.set(projectId, filtered);
+            break;
+          }
+        }
+        return {
+          recordings: newRecordings,
+          selectedRecordingId: state.selectedRecordingId === id ? null : state.selectedRecordingId,
+        };
+      });
+      // Refresh projects to get updated recording count
+      get().fetchProjects();
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to delete recording' });
+      throw err;
+    }
+  },
+
+  // Start transcription
+  startTranscription: async (recordingId, options) => {
+    set({ error: null });
+    try {
+      await apiClient.startTranscription(recordingId, options);
+      // Update local state to show processing
+      set((state) => {
+        const newRecordings = new Map(state.recordings);
+        for (const [projectId, recs] of newRecordings) {
+          const index = recs.findIndex((r) => r.id === recordingId);
+          if (index !== -1) {
+            const existingRecording = recs[index];
+            if (existingRecording) {
+              const updated = [...recs];
+              updated[index] = {
+                ...existingRecording,
+                transcriptionStatus: 'processing' as const,
+                transcriptionProgress: 0,
+              };
+              newRecordings.set(projectId, updated);
+            }
+            break;
+          }
+        }
+        return { recordings: newRecordings };
+      });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to start transcription' });
+      throw err;
+    }
+  },
 
   selectProject: (id) => set({ selectedProjectId: id }),
-
-  setRecordings: (projectId, recordings) =>
-    set((state) => {
-      const newRecordings = new Map(state.recordings);
-      newRecordings.set(projectId, recordings);
-      return { recordings: newRecordings };
-    }),
-
-  addRecording: (recording) =>
-    set((state) => {
-      const newRecordings = new Map(state.recordings);
-      const projectRecordings = newRecordings.get(recording.projectId) || [];
-      newRecordings.set(recording.projectId, [...projectRecordings, recording]);
-      return { recordings: newRecordings };
-    }),
-
-  updateRecording: (id, updates) =>
-    set((state) => {
-      const newRecordings = new Map(state.recordings);
-      for (const [projectId, recs] of newRecordings) {
-        const index = recs.findIndex((r) => r.id === id);
-        if (index !== -1) {
-          const updated = [...recs];
-          const existingRecording = updated[index];
-          updated[index] = {
-            ...existingRecording,
-            ...updates,
-            updatedAt: new Date().toISOString(),
-          } as Recording;
-          newRecordings.set(projectId, updated);
-          break;
-        }
-      }
-      return { recordings: newRecordings };
-    }),
-
-  deleteRecording: (id) =>
-    set((state) => {
-      const newRecordings = new Map(state.recordings);
-      for (const [projectId, recs] of newRecordings) {
-        const filtered = recs.filter((r) => r.id !== id);
-        if (filtered.length !== recs.length) {
-          newRecordings.set(projectId, filtered);
-          break;
-        }
-      }
-      return {
-        recordings: newRecordings,
-        selectedRecordingId: state.selectedRecordingId === id ? null : state.selectedRecordingId,
-      };
-    }),
-
   selectRecording: (id) => set({ selectedRecordingId: id }),
-
-  setProjectsLoading: (loading) => set({ projectsLoading: loading }),
-  setRecordingsLoading: (loading) => set({ recordingsLoading: loading }),
-
-  // Load mock data for demonstration
-  loadMockData: () => {
-    const mockProjects: Project[] = [
-      {
-        id: 'proj-1',
-        name: 'Deposition - Smith v. Jones',
-        description: 'Plaintiff deposition transcript',
-        status: 'active',
-        recordingCount: 3,
-        totalDuration: 7200000, // 2 hours
-        createdAt: '2024-01-15T10:00:00Z',
-        updatedAt: '2024-01-15T14:30:00Z',
-      },
-      {
-        id: 'proj-2',
-        name: 'Client Interview - Johnson',
-        description: 'Initial consultation recording',
-        status: 'active',
-        recordingCount: 1,
-        totalDuration: 2700000, // 45 minutes
-        createdAt: '2024-01-14T09:00:00Z',
-        updatedAt: '2024-01-14T10:00:00Z',
-      },
-      {
-        id: 'proj-3',
-        name: 'Board Meeting Q4 2023',
-        description: 'Quarterly board meeting minutes',
-        status: 'archived',
-        recordingCount: 2,
-        totalDuration: 5400000, // 1.5 hours
-        createdAt: '2023-12-20T14:00:00Z',
-        updatedAt: '2023-12-20T16:00:00Z',
-      },
-    ];
-
-    const mockRecordings: Recording[] = [
-      {
-        id: 'rec-1',
-        projectId: 'proj-1',
-        name: 'Session 1 - Morning',
-        sourceType: 'upload',
-        mediaType: 'audio',
-        format: 'wav',
-        duration: 3600000,
-        size: 345678901,
-        storagePath: '/recordings/rec-1.wav',
-        transcriptionStatus: 'completed',
-        transcriptionProgress: 100,
-        createdAt: '2024-01-15T10:00:00Z',
-        updatedAt: '2024-01-15T11:30:00Z',
-      },
-      {
-        id: 'rec-2',
-        projectId: 'proj-1',
-        name: 'Session 2 - Afternoon',
-        sourceType: 'upload',
-        mediaType: 'audio',
-        format: 'wav',
-        duration: 2400000,
-        size: 234567890,
-        storagePath: '/recordings/rec-2.wav',
-        transcriptionStatus: 'processing',
-        transcriptionProgress: 65,
-        createdAt: '2024-01-15T13:00:00Z',
-        updatedAt: '2024-01-15T14:00:00Z',
-      },
-      {
-        id: 'rec-3',
-        projectId: 'proj-1',
-        name: 'Session 3 - Follow-up',
-        sourceType: 'live',
-        mediaType: 'audio',
-        format: 'wav',
-        duration: 1200000,
-        size: 123456789,
-        storagePath: '/recordings/rec-3.wav',
-        transcriptionStatus: 'pending',
-        transcriptionProgress: 0,
-        createdAt: '2024-01-15T15:00:00Z',
-        updatedAt: '2024-01-15T15:00:00Z',
-      },
-      {
-        id: 'rec-4',
-        projectId: 'proj-2',
-        name: 'Consultation Recording',
-        sourceType: 'live',
-        mediaType: 'video',
-        format: 'mp4',
-        duration: 2700000,
-        size: 567890123,
-        storagePath: '/recordings/rec-4.mp4',
-        transcriptionStatus: 'completed',
-        transcriptionProgress: 100,
-        createdAt: '2024-01-14T09:00:00Z',
-        updatedAt: '2024-01-14T10:00:00Z',
-      },
-    ];
-
-    const recordingsMap = new Map<string, Recording[]>();
-    recordingsMap.set('proj-1', mockRecordings.filter((r) => r.projectId === 'proj-1'));
-    recordingsMap.set('proj-2', mockRecordings.filter((r) => r.projectId === 'proj-2'));
-
-    set({
-      projects: mockProjects,
-      recordings: recordingsMap,
-    });
-  },
+  clearError: () => set({ error: null }),
 }));
