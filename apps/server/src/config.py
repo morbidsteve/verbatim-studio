@@ -8,8 +8,9 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "change-me-in-production"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/verbatim"
+    # Database (SQLite for local dev, PostgreSQL for production)
+    database_url: str = "sqlite+aiosqlite:///./data/verbatim.db"
+    # Use this for PostgreSQL: "postgresql+asyncpg://postgres:postgres@localhost:5432/verbatim"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

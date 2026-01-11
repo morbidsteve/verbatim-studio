@@ -1,8 +1,20 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import settings
 from src.api import auth, projects, recordings, transcripts, users
+from src.database.connection import init_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
+    # Startup: Initialize database
+    await init_db()
+    yield
+    # Shutdown: cleanup if needed
+
 
 app = FastAPI(
     title="Verbatim Studio API",
@@ -10,6 +22,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/api/docs" if settings.debug else None,
     redoc_url="/api/redoc" if settings.debug else None,
+    lifespan=lifespan,
 )
 
 # CORS

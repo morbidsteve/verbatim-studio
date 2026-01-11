@@ -1,76 +1,123 @@
-import { app as d, BrowserWindow as g, ipcMain as t, nativeTheme as _, dialog as u, shell as c } from "electron";
-import s from "path";
-import r from "fs/promises";
-import { fileURLToPath as D } from "url";
-import F from "electron-store";
-const m = s.dirname(D(import.meta.url)), h = new F({
+import { app, BrowserWindow, ipcMain, nativeTheme, dialog, shell } from "electron";
+import path from "path";
+import fs from "fs/promises";
+import { fileURLToPath } from "url";
+import Store from "electron-store";
+const __dirname$1 = path.dirname(fileURLToPath(import.meta.url));
+const store = new Store({
   encryptionKey: "verbatim-studio-secure-key",
   // In production, derive from machine ID
   name: "verbatim-config"
 });
-let a = null;
-const f = process.env.VITE_DEV_SERVER_URL, p = d.getPath("userData"), y = s.join(p, "database.sqlite"), l = s.join(p, "storage"), x = s.join(p, "models");
-async function A() {
-  await r.mkdir(l, { recursive: !0 }), await r.mkdir(x, { recursive: !0 }), await r.mkdir(s.join(l, "recordings"), { recursive: !0 }), await r.mkdir(s.join(l, "exports"), { recursive: !0 }), await r.mkdir(s.join(l, "temp"), { recursive: !0 });
+let mainWindow = null;
+const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
+const APP_DATA_PATH = app.getPath("userData");
+const DATABASE_PATH = path.join(APP_DATA_PATH, "database.sqlite");
+const STORAGE_PATH = path.join(APP_DATA_PATH, "storage");
+const MODELS_PATH = path.join(APP_DATA_PATH, "models");
+async function ensureDirectories() {
+  await fs.mkdir(STORAGE_PATH, { recursive: true });
+  await fs.mkdir(MODELS_PATH, { recursive: true });
+  await fs.mkdir(path.join(STORAGE_PATH, "recordings"), { recursive: true });
+  await fs.mkdir(path.join(STORAGE_PATH, "exports"), { recursive: true });
+  await fs.mkdir(path.join(STORAGE_PATH, "temp"), { recursive: true });
 }
-function w() {
-  a = new g({
+function createWindow() {
+  mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1024,
     minHeight: 700,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
-    backgroundColor: _.shouldUseDarkColors ? "#0a0a0a" : "#ffffff",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff",
     webPreferences: {
-      preload: s.join(m, "preload.js"),
-      nodeIntegration: !1,
-      contextIsolation: !0,
-      sandbox: !1
+      preload: path.join(__dirname$1, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false
       // Required for file system access
     }
-  }), a.webContents.setWindowOpenHandler(({ url: n }) => (c.openExternal(n), { action: "deny" })), f ? (a.loadURL(f), a.webContents.openDevTools()) : a.loadFile(s.join(m, "../dist/index.html")), a.on("closed", () => {
-    a = null;
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+  if (VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(VITE_DEV_SERVER_URL);
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(path.join(__dirname$1, "../dist/index.html"));
+  }
+  mainWindow.on("closed", () => {
+    mainWindow = null;
   });
 }
-d.whenReady().then(async () => {
-  await A(), w(), d.on("activate", () => {
-    g.getAllWindows().length === 0 && w();
+app.whenReady().then(async () => {
+  await ensureDirectories();
+  createWindow();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
-d.on("window-all-closed", () => {
-  process.platform !== "darwin" && d.quit();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });
-t.handle("store:get", (n, e) => h.get(e));
-t.handle("store:set", (n, e, i) => {
-  h.set(e, i);
+ipcMain.handle("store:get", (_, key) => {
+  return store.get(key);
 });
-t.handle("store:delete", (n, e) => {
-  h.delete(e);
+ipcMain.handle("store:set", (_, key, value) => {
+  store.set(key, value);
 });
-t.handle("app:getVersion", () => d.getVersion());
-t.handle("app:getPlatform", () => process.platform);
-t.handle("app:getPath", (n, e) => d.getPath(e));
-t.handle("app:getPaths", () => ({
-  appData: p,
-  database: y,
-  storage: l,
-  models: x,
-  recordings: s.join(l, "recordings"),
-  exports: s.join(l, "exports"),
-  temp: s.join(l, "temp")
-}));
-t.handle("app:getTheme", () => _.shouldUseDarkColors ? "dark" : "light");
-t.handle("window:minimize", () => {
-  a == null || a.minimize();
+ipcMain.handle("store:delete", (_, key) => {
+  store.delete(key);
 });
-t.handle("window:maximize", () => (a != null && a.isMaximized() ? a.unmaximize() : a == null || a.maximize(), a == null ? void 0 : a.isMaximized()));
-t.handle("window:close", () => {
-  a == null || a.close();
+ipcMain.handle("app:getVersion", () => {
+  return app.getVersion();
 });
-t.handle("window:isMaximized", () => (a == null ? void 0 : a.isMaximized()) ?? !1);
-t.handle("file:openDialog", async (n, e) => {
-  const i = {
+ipcMain.handle("app:getPlatform", () => {
+  return process.platform;
+});
+ipcMain.handle("app:getPath", (_, name) => {
+  return app.getPath(name);
+});
+ipcMain.handle("app:getPaths", () => {
+  return {
+    appData: APP_DATA_PATH,
+    database: DATABASE_PATH,
+    storage: STORAGE_PATH,
+    models: MODELS_PATH,
+    recordings: path.join(STORAGE_PATH, "recordings"),
+    exports: path.join(STORAGE_PATH, "exports"),
+    temp: path.join(STORAGE_PATH, "temp")
+  };
+});
+ipcMain.handle("app:getTheme", () => {
+  return nativeTheme.shouldUseDarkColors ? "dark" : "light";
+});
+ipcMain.handle("window:minimize", () => {
+  mainWindow == null ? void 0 : mainWindow.minimize();
+});
+ipcMain.handle("window:maximize", () => {
+  if (mainWindow == null ? void 0 : mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow == null ? void 0 : mainWindow.maximize();
+  }
+  return mainWindow == null ? void 0 : mainWindow.isMaximized();
+});
+ipcMain.handle("window:close", () => {
+  mainWindow == null ? void 0 : mainWindow.close();
+});
+ipcMain.handle("window:isMaximized", () => {
+  return (mainWindow == null ? void 0 : mainWindow.isMaximized()) ?? false;
+});
+ipcMain.handle("file:openDialog", async (_, options) => {
+  const defaultOptions = {
     properties: ["openFile"],
     filters: [
       { name: "Audio Files", extensions: ["wav", "mp3", "m4a", "flac", "ogg", "aac"] },
@@ -78,10 +125,11 @@ t.handle("file:openDialog", async (n, e) => {
       { name: "All Files", extensions: ["*"] }
     ]
   };
-  return await u.showOpenDialog(a, { ...i, ...e });
+  const result = await dialog.showOpenDialog(mainWindow, { ...defaultOptions, ...options });
+  return result;
 });
-t.handle("file:openMultipleDialog", async (n, e) => {
-  const i = {
+ipcMain.handle("file:openMultipleDialog", async (_, options) => {
+  const defaultOptions = {
     properties: ["openFile", "multiSelections"],
     filters: [
       { name: "Audio Files", extensions: ["wav", "mp3", "m4a", "flac", "ogg", "aac"] },
@@ -89,53 +137,68 @@ t.handle("file:openMultipleDialog", async (n, e) => {
       { name: "All Files", extensions: ["*"] }
     ]
   };
-  return await u.showOpenDialog(a, { ...i, ...e });
+  const result = await dialog.showOpenDialog(mainWindow, { ...defaultOptions, ...options });
+  return result;
 });
-t.handle("file:saveDialog", async (n, e) => await u.showSaveDialog(a, e ?? {}));
-t.handle("file:read", async (n, e) => await r.readFile(e));
-t.handle("file:readText", async (n, e) => await r.readFile(e, "utf-8"));
-t.handle("file:write", async (n, e, i) => {
-  await r.writeFile(e, i);
+ipcMain.handle("file:saveDialog", async (_, options) => {
+  const result = await dialog.showSaveDialog(mainWindow, options ?? {});
+  return result;
 });
-t.handle("file:exists", async (n, e) => {
+ipcMain.handle("file:read", async (_, filePath) => {
+  const data = await fs.readFile(filePath);
+  return data;
+});
+ipcMain.handle("file:readText", async (_, filePath) => {
+  const data = await fs.readFile(filePath, "utf-8");
+  return data;
+});
+ipcMain.handle("file:write", async (_, filePath, data) => {
+  await fs.writeFile(filePath, data);
+});
+ipcMain.handle("file:exists", async (_, filePath) => {
   try {
-    return await r.access(e), !0;
+    await fs.access(filePath);
+    return true;
   } catch {
-    return !1;
+    return false;
   }
 });
-t.handle("file:stat", async (n, e) => {
-  const i = await r.stat(e);
+ipcMain.handle("file:stat", async (_, filePath) => {
+  const stats = await fs.stat(filePath);
   return {
-    size: i.size,
-    isFile: i.isFile(),
-    isDirectory: i.isDirectory(),
-    created: i.birthtime.toISOString(),
-    modified: i.mtime.toISOString()
+    size: stats.size,
+    isFile: stats.isFile(),
+    isDirectory: stats.isDirectory(),
+    created: stats.birthtime.toISOString(),
+    modified: stats.mtime.toISOString()
   };
 });
-t.handle("file:copy", async (n, e, i) => {
-  await r.copyFile(e, i);
+ipcMain.handle("file:copy", async (_, src, dest) => {
+  await fs.copyFile(src, dest);
 });
-t.handle("file:delete", async (n, e) => {
-  await r.unlink(e);
+ipcMain.handle("file:delete", async (_, filePath) => {
+  await fs.unlink(filePath);
 });
-t.handle("file:listDir", async (n, e) => (await r.readdir(e, { withFileTypes: !0 })).map((o) => ({
-  name: o.name,
-  isFile: o.isFile(),
-  isDirectory: o.isDirectory(),
-  path: s.join(e, o.name)
-})));
-t.handle("file:showInFolder", async (n, e) => {
-  c.showItemInFolder(e);
+ipcMain.handle("file:listDir", async (_, dirPath) => {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  return entries.map((entry) => ({
+    name: entry.name,
+    isFile: entry.isFile(),
+    isDirectory: entry.isDirectory(),
+    path: path.join(dirPath, entry.name)
+  }));
 });
-t.handle("audio:getInfo", async (n, e) => {
-  const i = await r.stat(e), o = s.extname(e).toLowerCase();
+ipcMain.handle("file:showInFolder", async (_, filePath) => {
+  shell.showItemInFolder(filePath);
+});
+ipcMain.handle("audio:getInfo", async (_, filePath) => {
+  const stats = await fs.stat(filePath);
+  const ext = path.extname(filePath).toLowerCase();
   return {
-    path: e,
-    name: s.basename(e),
-    format: o.slice(1),
-    size: i.size,
+    path: filePath,
+    name: path.basename(filePath),
+    format: ext.slice(1),
+    size: stats.size,
     // These would come from ffprobe in a real implementation
     duration: null,
     sampleRate: null,
@@ -143,25 +206,30 @@ t.handle("audio:getInfo", async (n, e) => {
     bitrate: null
   };
 });
-let v = {
+let servicesStatus = {
   whisper: { name: "Whisper Service", status: "stopped", port: 8001 },
   diarization: { name: "Diarization Service", status: "stopped", port: 8003 },
   inflection: { name: "Inflection Analysis", status: "stopped", port: 8004 }
 };
-t.handle("services:getStatus", () => v);
-t.handle("services:checkHealth", async (n, e) => {
-  const i = v[e];
-  if (!(i != null && i.port)) return !1;
+ipcMain.handle("services:getStatus", () => {
+  return servicesStatus;
+});
+ipcMain.handle("services:checkHealth", async (_, serviceName) => {
+  const service = servicesStatus[serviceName];
+  if (!(service == null ? void 0 : service.port)) return false;
   try {
-    return (await fetch(`http://localhost:${i.port}/health`)).ok;
+    const response = await fetch(`http://localhost:${service.port}/health`);
+    return response.ok;
   } catch {
-    return !1;
+    return false;
   }
 });
-t.handle("database:getPath", () => y);
-t.handle("shell:openExternal", async (n, e) => {
-  await c.openExternal(e);
+ipcMain.handle("database:getPath", () => {
+  return DATABASE_PATH;
 });
-t.handle("shell:openPath", async (n, e) => {
-  await c.openPath(e);
+ipcMain.handle("shell:openExternal", async (_, url) => {
+  await shell.openExternal(url);
+});
+ipcMain.handle("shell:openPath", async (_, filePath) => {
+  await shell.openPath(filePath);
 });
