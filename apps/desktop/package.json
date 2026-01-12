@@ -53,6 +53,7 @@
   "build": {
     "appId": "com.verbatim.studio",
     "productName": "Verbatim Studio",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
