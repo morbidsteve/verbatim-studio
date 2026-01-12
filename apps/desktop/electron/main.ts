@@ -1,17 +1,57 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, nativeTheme } from 'electron';
 import path from 'path';
 import fs from 'fs/promises';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import Store from 'electron-store';
 import { dockerManager } from './docker-manager';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Initialize electron store for secure local storage
-const store = new Store({
-  encryptionKey: 'verbatim-studio-secure-key', // In production, derive from machine ID
-  name: 'verbatim-config',
-});
+// Simple JSON file-based store (replaces electron-store to avoid ESM issues)
+class SimpleStore {
+  private data: Record<string, unknown> = {};
+  private filePath: string;
+
+  constructor(name: string) {
+    this.filePath = path.join(app.getPath('userData'), `${name}.json`);
+    this.load();
+  }
+
+  private load() {
+    try {
+      if (existsSync(this.filePath)) {
+        const raw = readFileSync(this.filePath, 'utf-8');
+        this.data = JSON.parse(raw);
+      }
+    } catch {
+      this.data = {};
+    }
+  }
+
+  private save() {
+    try {
+      writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+    } catch (error) {
+      console.error('Failed to save store:', error);
+    }
+  }
+
+  get(key: string): unknown {
+    return this.data[key];
+  }
+
+  set(key: string, value: unknown) {
+    this.data[key] = value;
+    this.save();
+  }
+
+  delete(key: string) {
+    delete this.data[key];
+    this.save();
+  }
+}
+
+const store = new SimpleStore('verbatim-config');
 
 let mainWindow: BrowserWindow | null = null;
 
