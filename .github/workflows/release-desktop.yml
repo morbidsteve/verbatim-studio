@@ -52,10 +52,12 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build packages
         run: pnpm build --filter=@verbatim/core --filter=@verbatim/ui --filter=@verbatim/database --filter=@verbatim/transcription
+        env:
+          TURBO_FORCE: true
 
       - name: Build Electron app
         working-directory: apps/desktop
