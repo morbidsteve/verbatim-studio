@@ -1,0 +1,84 @@
+# Verbatim Studio - Bundled Configuration
+# This file is embedded in the Electron app and manages all transcription services
+# Services use CPU mode by default for broad compatibility
+
+version: "3.9"
+
+services:
+  # FastAPI backend server
+  api-server:
+    image: verbatim/server:latest
+    build:
+      context: ../../../apps/server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - verbatim-data:/app/data
+      - verbatim-uploads:/app/uploads
+    environment:
+      - DATABASE_URL=sqlite:///app/data/verbatim.db
+      - WHISPER_SERVICE_URL=http://whisper-service:8001
+      - DIARIZATION_SERVICE_URL=http://diarization:8000
+      - DEBUG=false
+    depends_on:
+      - whisper-service
+      - diarization
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # WhisperX for file transcription (CPU mode)
+  whisper-service:
+    image: verbatim/whisper-service:cpu
+    build:
+      context: ../../../services/whisper-service
+      dockerfile: Dockerfile.cpu
+    ports:
+      - "8001:8001"
+    volumes:
+      - whisper-models:/app/models
+      - verbatim-uploads:/app/uploads
+    environment:
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-small}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Speaker diarization (CPU)
+  diarization:
+    image: verbatim/diarization:cpu
+    build:
+      context: ../../../services/diarization
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8000"
+    volumes:
+      - diarization-models:/app/models
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - DEVICE=cpu
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  verbatim-data:
+    name: verbatim-studio-data
+  verbatim-uploads:
+    name: verbatim-studio-uploads
+  whisper-models:
+    name: verbatim-studio-whisper-models
+  diarization-models:
+    name: verbatim-studio-diarization-models

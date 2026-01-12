@@ -1,12 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 import { Dashboard } from './pages/Dashboard';
 import { Projects } from './pages/Projects';
 import { ProjectDetail } from './pages/ProjectDetail';
+import { TranscriptViewer } from './pages/TranscriptViewer';
 import { Recording } from './pages/Recording';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
+import { SetupScreen } from './components/SetupScreen';
 import { useTheme } from './hooks/useTheme';
 import { useAppStore } from './stores/app-store';
 import { useAuthStore } from './stores/auth-store';
@@ -38,11 +40,20 @@ export function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const fetchProjects = useProjectStore((state) => state.fetchProjects);
 
+  // Track whether Docker services are ready
+  const [servicesReady, setServicesReady] = useState(false);
+
   // Initialize app on mount
   useEffect(() => {
     initialize();
-    checkAuth();
-  }, [initialize, checkAuth]);
+  }, [initialize]);
+
+  // Check auth and fetch projects once services are ready
+  useEffect(() => {
+    if (servicesReady) {
+      checkAuth();
+    }
+  }, [servicesReady, checkAuth]);
 
   // Fetch projects when authenticated
   useEffect(() => {
@@ -50,6 +61,15 @@ export function App() {
       fetchProjects();
     }
   }, [isAuthenticated, fetchProjects]);
+
+  // Show setup screen until services are ready
+  if (!servicesReady) {
+    return (
+      <div className={theme}>
+        <SetupScreen onReady={() => setServicesReady(true)} />
+      </div>
+    );
+  }
 
   return (
     <div className={theme}>
@@ -66,6 +86,7 @@ export function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:projectId" element={<ProjectDetail />} />
+            <Route path="/projects/:projectId/recordings/:recordingId/transcript" element={<TranscriptViewer />} />
             <Route path="/recording" element={<Recording />} />
             <Route path="/settings" element={<Settings />} />
           </Route>

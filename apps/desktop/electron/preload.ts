@@ -54,6 +54,28 @@ export interface ServiceStatus {
   error?: string;
 }
 
+// Docker types
+export interface PullProgress {
+  service: string;
+  percent: number;
+  status: string;
+}
+
+export interface ServiceHealth {
+  name: string;
+  healthy: boolean;
+  port: number;
+  error?: string;
+}
+
+export type DockerStatus =
+  | { state: 'not-installed' }
+  | { state: 'not-running' }
+  | { state: 'pulling'; progress: PullProgress }
+  | { state: 'starting'; message: string }
+  | { state: 'ready'; services: ServiceHealth[] }
+  | { state: 'error'; message: string; recoverable: boolean };
+
 // Expose protected methods to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
   // Store operations (encrypted local storage)
@@ -117,6 +139,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
     openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path),
   },
+
+  // Docker operations
+  docker: {
+    getStatus: () => ipcRenderer.invoke('docker:getStatus'),
+    checkInstalled: () => ipcRenderer.invoke('docker:checkInstalled'),
+    checkRunning: () => ipcRenderer.invoke('docker:checkRunning'),
+    startDocker: () => ipcRenderer.invoke('docker:startDocker'),
+    openDownloadPage: () => ipcRenderer.invoke('docker:openDownloadPage'),
+    startServices: () => ipcRenderer.invoke('docker:startServices'),
+    stopServices: () => ipcRenderer.invoke('docker:stopServices'),
+    restartServices: () => ipcRenderer.invoke('docker:restartServices'),
+    healthCheck: () => ipcRenderer.invoke('docker:healthCheck'),
+    getLogs: (service?: string) => ipcRenderer.invoke('docker:getLogs', service),
+    ensureReady: () => ipcRenderer.invoke('docker:ensureReady'),
+    onStatusChange: (callback: (status: DockerStatus) => void) => {
+      const listener = (_event: unknown, status: DockerStatus) => callback(status);
+      ipcRenderer.on('docker:statusChange', listener);
+      return () => ipcRenderer.removeListener('docker:statusChange', listener);
+    },
+  },
 });
 
 // Type declarations for the renderer
@@ -168,6 +210,20 @@ declare global {
       shell: {
         openExternal: (url: string) => Promise<void>;
         openPath: (path: string) => Promise<void>;
+      };
+      docker: {
+        getStatus: () => Promise<DockerStatus>;
+        checkInstalled: () => Promise<boolean>;
+        checkRunning: () => Promise<boolean>;
+        startDocker: () => Promise<boolean>;
+        openDownloadPage: () => Promise<void>;
+        startServices: () => Promise<void>;
+        stopServices: () => Promise<void>;
+        restartServices: () => Promise<void>;
+        healthCheck: () => Promise<ServiceHealth[]>;
+        getLogs: (service?: string) => Promise<string>;
+        ensureReady: () => Promise<void>;
+        onStatusChange: (callback: (status: DockerStatus) => void) => () => void;
       };
     };
   }

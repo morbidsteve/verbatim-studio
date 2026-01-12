@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import Store from 'electron-store';
+import { dockerManager } from './docker-manager';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,7 +46,24 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false, // Required for file system access
+      webSecurity: !VITE_DEV_SERVER_URL, // Disable in dev for API calls
     },
+  });
+
+  // Set Content Security Policy to allow API connections
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "connect-src 'self' http://localhost:* ws://localhost:*; " +
+          "img-src 'self' data: blob:; " +
+          "media-src 'self' http://localhost:* blob:; " +
+          "style-src 'self' 'unsafe-inline';"
+        ],
+      },
+    });
   });
 
   // Open external links in default browser
@@ -80,6 +98,25 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+// Graceful shutdown - stop Docker containers when quitting
+let isQuitting = false;
+
+app.on('before-quit', async (event) => {
+  if (!isQuitting) {
+    event.preventDefault();
+    isQuitting = true;
+
+    console.log('Stopping Docker services...');
+    try {
+      await dockerManager.stopServices();
+    } catch (error) {
+      console.error('Error stopping services:', error);
+    }
+
     app.quit();
   }
 });
@@ -325,4 +362,60 @@ ipcMain.handle('shell:openExternal', async (_, url: string) => {
 
 ipcMain.handle('shell:openPath', async (_, filePath: string) => {
   await shell.openPath(filePath);
+});
+
+// ============================================================================
+// IPC Handlers - Docker Operations
+// ============================================================================
+
+// Forward Docker status changes to renderer
+dockerManager.on('onStatusChange', (status) => {
+  mainWindow?.webContents.send('docker:statusChange', status);
+});
+
+ipcMain.handle('docker:getStatus', () => {
+  return dockerManager.getStatus();
+});
+
+ipcMain.handle('docker:checkInstalled', async () => {
+  return dockerManager.checkDockerInstalled();
+});
+
+ipcMain.handle('docker:checkRunning', async () => {
+  return dockerManager.checkDockerRunning();
+});
+
+ipcMain.handle('docker:startDocker', async () => {
+  return dockerManager.startDocker();
+});
+
+ipcMain.handle('docker:openDownloadPage', () => {
+  dockerManager.openDockerDownloadPage();
+});
+
+ipcMain.handle('docker:startServices', async () => {
+  await dockerManager.startServices();
+});
+
+ipcMain.handle('docker:stopServices', async () => {
+  await dockerManager.stopServices();
+});
+
+ipcMain.handle('docker:restartServices', async () => {
+  await dockerManager.restartServices();
+});
+
+ipcMain.handle('docker:healthCheck', async () => {
+  return dockerManager.healthCheck();
+});
+
+ipcMain.handle('docker:getLogs', async (_, service?: string) => {
+  if (service) {
+    return dockerManager.getLogs(service);
+  }
+  return dockerManager.getAllLogs();
+});
+
+ipcMain.handle('docker:ensureReady', async () => {
+  await dockerManager.ensureReady();
 });
