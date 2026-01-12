@@ -5,6 +5,10 @@
   "description": "Verbatim Studio Desktop Application",
   "author": "Verbatim Studio",
   "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morbidsteve/verbatim-studio.git"
+  },
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
