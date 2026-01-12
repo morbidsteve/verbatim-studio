@@ -54,6 +54,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Debug - Show tsup config
+        run: cat packages/ui/tsup.config.ts
+
       - name: Build packages
         run: pnpm build --filter=@verbatim/core --filter=@verbatim/ui --filter=@verbatim/database --filter=@verbatim/transcription
         env:
