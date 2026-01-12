@@ -1,10 +1,85 @@
-import { spawn, exec } from 'child_process';
+import { spawn, exec, ExecOptions } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import { app, shell } from 'electron';
 
-const execAsync = promisify(exec);
+const execAsyncRaw = promisify(exec);
+
+// Common Docker binary locations by platform
+const DOCKER_PATHS: Record<string, string[]> = {
+  darwin: [
+    '/usr/local/bin/docker',
+    '/opt/homebrew/bin/docker',
+    '/Applications/Docker.app/Contents/Resources/bin/docker',
+  ],
+  win32: [
+    'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe',
+    'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe',
+  ],
+  linux: [
+    '/usr/bin/docker',
+    '/usr/local/bin/docker',
+  ],
+};
+
+// Directories to add to PATH for child processes
+const EXTRA_PATH_DIRS: Record<string, string[]> = {
+  darwin: [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    '/Applications/Docker.app/Contents/Resources/bin',
+  ],
+  win32: [
+    'C:\\Program Files\\Docker\\Docker\\resources\\bin',
+  ],
+  linux: [
+    '/usr/bin',
+    '/usr/local/bin',
+  ],
+};
+
+// Find Docker binary path
+function findDockerPath(): string | null {
+  const platform = process.platform;
+  const paths = DOCKER_PATHS[platform] || [];
+
+  for (const p of paths) {
+    if (existsSync(p)) {
+      return p;
+    }
+  }
+
+  return null;
+}
+
+// Get enhanced PATH with Docker directories
+function getEnhancedPath(): string {
+  const platform = process.platform;
+  const currentPath = process.env.PATH || '';
+  const extraDirs = EXTRA_PATH_DIRS[platform] || [];
+  const separator = platform === 'win32' ? ';' : ':';
+
+  // Add extra directories that exist
+  const existingExtraDirs = extraDirs.filter(dir => existsSync(dir));
+
+  return [...existingExtraDirs, currentPath].join(separator);
+}
+
+// Execute command with enhanced PATH
+async function execAsync(command: string, options: ExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
+  const enhancedOptions: ExecOptions = {
+    ...options,
+    env: {
+      ...process.env,
+      ...options.env,
+      PATH: getEnhancedPath(),
+    },
+  };
+
+  return execAsyncRaw(command, enhancedOptions);
+}
 
 // ============================================================================
 // Types
@@ -92,6 +167,13 @@ export class DockerManager {
   // --------------------------------------------------------------------------
 
   async checkDockerInstalled(): Promise<boolean> {
+    // First, check if Docker binary exists at known locations
+    const dockerPath = findDockerPath();
+    if (dockerPath) {
+      return true;
+    }
+
+    // Fallback: try running docker command with enhanced PATH
     try {
       await execAsync('docker --version');
       return true;
@@ -186,6 +268,10 @@ export class DockerManager {
       const proc = spawn('docker', ['compose', '-f', composeFile, '-p', this.projectName, 'pull'], {
         cwd: composeDir,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          PATH: getEnhancedPath(),
+        },
       });
 
       let currentService = '';
