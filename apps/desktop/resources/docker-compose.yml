@@ -1,16 +1,11 @@
 # Verbatim Studio - Bundled Configuration
 # This file is embedded in the Electron app and manages all transcription services
-# Services use CPU mode by default for broad compatibility
-
-version: "3.9"
+# Images are pulled from GitHub Container Registry (ghcr.io)
 
 services:
   # FastAPI backend server
   api-server:
-    image: verbatim/server:latest
-    build:
-      context: ../../../apps/server
-      dockerfile: Dockerfile
+    image: ghcr.io/morbidsteve/verbatim-server:latest
     ports:
       - "8000:8000"
     volumes:
@@ -31,12 +26,9 @@ services:
       retries: 3
       start_period: 10s
 
-  # WhisperX for file transcription (CPU mode)
+  # WhisperX for file transcription (CPU mode for broad compatibility)
   whisper-service:
-    image: verbatim/whisper-service:cpu
-    build:
-      context: ../../../services/whisper-service
-      dockerfile: Dockerfile.cpu
+    image: ghcr.io/morbidsteve/verbatim-whisper:latest
     ports:
       - "8001:8001"
     volumes:
@@ -51,14 +43,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
-  # Speaker diarization (CPU)
+  # Speaker diarization
   diarization:
-    image: verbatim/diarization:cpu
-    build:
-      context: ../../../services/diarization
-      dockerfile: Dockerfile
+    image: ghcr.io/morbidsteve/verbatim-diarization:latest
     ports:
       - "8003:8000"
     volumes:
@@ -71,7 +60,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
 volumes:
   verbatim-data:
