@@ -314,11 +314,33 @@ export function ProjectDetail() {
                         <span>{formatRelativeTime(recording.createdAt)}</span>
                       </div>
                       {recording.transcriptionStatus === 'processing' && (
-                        <div className="mt-2 w-48">
-                          <Progress value={recording.transcriptionProgress} className="h-1" />
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Transcribing... {recording.transcriptionProgress}%
-                          </p>
+                        <div className="mt-2 w-64">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1">
+                              <Progress value={recording.transcriptionProgress || 10} className="h-1.5" />
+                            </div>
+                            <span className="text-xs font-medium text-muted-foreground w-8">
+                              {recording.transcriptionProgress || 0}%
+                            </span>
+                          </div>
+                          <div className="mt-1.5 flex items-center gap-1.5">
+                            <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+                            <p className="text-xs text-muted-foreground">
+                              {recording.transcriptionProgress === 0
+                                ? 'Preparing transcription...'
+                                : recording.transcriptionProgress < 30
+                                  ? 'Loading model...'
+                                  : recording.transcriptionProgress < 90
+                                    ? 'Transcribing audio...'
+                                    : 'Finalizing...'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {recording.transcriptionStatus === 'failed' && (
+                        <div className="mt-2 flex items-center gap-1.5 text-destructive">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          <p className="text-xs">Transcription failed - click to retry</p>
                         </div>
                       )}
                     </div>
@@ -341,14 +363,16 @@ export function ProjectDetail() {
                           <Play className="mr-2 h-4 w-4" />
                           Play
                         </DropdownMenuItem>
-                        {recording.transcriptionStatus === 'pending' && (
+                        {(recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'failed') && (
                           <DropdownMenuItem onClick={() => handleStartTranscription(recording.id)}>
                             <Loader2 className="mr-2 h-4 w-4" />
-                            Start Transcription
+                            {recording.transcriptionStatus === 'failed' ? 'Retry Transcription' : 'Start Transcription'}
                           </DropdownMenuItem>
                         )}
                         {recording.transcriptionStatus === 'completed' && (
-                          <DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => navigate(`/projects/${projectId}/recordings/${recording.id}/transcript`)}
+                          >
                             <Eye className="mr-2 h-4 w-4" />
                             View Transcript
                           </DropdownMenuItem>

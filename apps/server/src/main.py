@@ -25,13 +25,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS - allow Electron and localhost origins
+cors_origins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "file://",  # Electron file protocol
+    "app://.",  # Electron app protocol
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=cors_origins if settings.debug else settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"http://localhost:\d+" if settings.debug else None,  # Allow any localhost port
 )
 
 # Routers

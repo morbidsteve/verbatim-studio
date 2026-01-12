@@ -1,23 +1,24 @@
 # Verbatim Studio - Basic Tier (CPU/ARM)
-# For systems without NVIDIA GPU
+# For systems without NVIDIA GPU (Mac, Windows, Linux without GPU)
 
 version: "3.9"
 
 services:
-  # whisper.cpp for CPU/ARM transcription
-  whisper-cpp:
-    image: verbatim/whisper-cpp:latest
+  # WhisperX for file transcription (CPU mode)
+  whisper-service:
+    image: verbatim/whisper-service:cpu
     build:
-      context: ../../services/whisper-cpp
+      context: ../../services/whisper-service
       dockerfile: Dockerfile.cpu
     ports:
-      - "8001:8000"
+      - "8001:8001"
     volumes:
       - whisper-models:/app/models
       - uploads:/app/uploads
     environment:
-      - MODEL_SIZE=small
-      - THREADS=4
+      - WHISPER_MODEL_SIZE=small
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
 
   # Speaker diarization (CPU)
   diarization:

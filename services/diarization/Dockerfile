@@ -19,6 +19,9 @@ WORKDIR /app
 
 RUN mkdir -p /app/models /app/uploads /app/embeddings
 
+# Upgrade pip to avoid dependency resolution bugs
+RUN pip install --upgrade pip setuptools wheel
+
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir -e .
 

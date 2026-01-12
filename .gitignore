@@ -142,3 +142,5 @@ playwright/.cache/
 *.bak
 *.backup
 .turbo
+.playwright-mcp/
+apps/desktop/dist-electron/

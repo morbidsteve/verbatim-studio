@@ -11,7 +11,7 @@ services:
       context: ../../services/whisper-service
       dockerfile: Dockerfile
     ports:
-      - "8001:8000"
+      - "8001:8001"
     volumes:
       - whisper-models:/app/models
       - uploads:/app/uploads

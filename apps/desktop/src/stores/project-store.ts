@@ -311,6 +311,46 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         }
         return { recordings: newRecordings };
       });
+
+      // Start polling for status updates
+      const pollStatus = async () => {
+        try {
+          const status = await apiClient.getTranscriptionStatus(recordingId);
+
+          // Update the recording in state
+          set((state) => {
+            const newRecordings = new Map(state.recordings);
+            for (const [projectId, recs] of newRecordings) {
+              const index = recs.findIndex((r) => r.id === recordingId);
+              if (index !== -1) {
+                const existingRecording = recs[index];
+                if (existingRecording) {
+                  const updated = [...recs];
+                  updated[index] = {
+                    ...existingRecording,
+                    transcriptionStatus: status.status as Recording['transcriptionStatus'],
+                    transcriptionProgress: status.progress,
+                  };
+                  newRecordings.set(projectId, updated);
+                }
+                break;
+              }
+            }
+            return { recordings: newRecordings };
+          });
+
+          // Continue polling if still processing
+          if (status.status === 'processing') {
+            setTimeout(pollStatus, 2000); // Poll every 2 seconds
+          }
+        } catch {
+          // Stop polling on error
+          console.error('Failed to poll transcription status');
+        }
+      };
+
+      // Start polling after a short delay
+      setTimeout(pollStatus, 1000);
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to start transcription' });
       throw err;

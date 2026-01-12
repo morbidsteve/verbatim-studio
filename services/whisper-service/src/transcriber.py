@@ -1,15 +1,12 @@
-"""WhisperX transcription engine."""
+"""Faster-Whisper transcription engine."""
 
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
-import torch
-
 from src.config import settings
 from src.schemas import (
-    DeviceType,
     ModelInfo,
     ModelSize,
     TranscriptionResult,
@@ -31,7 +28,7 @@ MODEL_INFO: dict[ModelSize, dict[str, Any]] = {
 
 
 class TranscriptionEngine:
-    """WhisperX-based transcription engine."""
+    """Faster-Whisper based transcription engine."""
 
     def __init__(self) -> None:
         self._models: dict[ModelSize, Any] = {}
@@ -48,15 +45,16 @@ class TranscriptionEngine:
         if settings.device != "auto":
             return settings.device
 
-        if torch.cuda.is_available():
-            logger.info("CUDA available, using GPU")
-            return "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            logger.info("MPS available, using Apple Silicon GPU")
-            return "mps"
-        else:
-            logger.info("No GPU available, using CPU")
-            return "cpu"
+        try:
+            import torch
+            if torch.cuda.is_available():
+                logger.info("CUDA available, using GPU")
+                return "cuda"
+        except ImportError:
+            pass
+
+        logger.info("Using CPU")
+        return "cpu"
 
     def _get_compute_type(self) -> str:
         """Get the compute type based on device."""
@@ -65,8 +63,6 @@ class TranscriptionEngine:
 
         if self._device == "cuda":
             return "float16"
-        elif self._device == "mps":
-            return "float32"  # MPS doesn't support float16 well
         else:
             return "int8"  # CPU optimization
 
@@ -105,10 +101,9 @@ class TranscriptionEngine:
         logger.info(f"Loading model {model_id.value} on {self._device}")
 
         try:
-            # Import whisperx here to avoid loading it at startup
-            import whisperx
+            from faster_whisper import WhisperModel
 
-            model = whisperx.load_model(
+            model = WhisperModel(
                 model_id.value,
                 device=self._device,
                 compute_type=self._compute_type,
@@ -128,8 +123,6 @@ class TranscriptionEngine:
             return False
 
         del self._models[model_id]
-        if self._device == "cuda":
-            torch.cuda.empty_cache()
         logger.info(f"Model {model_id.value} unloaded")
         return True
 
@@ -146,8 +139,6 @@ class TranscriptionEngine:
         vad_parameters: dict[str, Any] | None = None,
     ) -> TranscriptionResult:
         """Transcribe an audio file."""
-        import whisperx
-
         audio_path = Path(audio_path)
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
@@ -159,66 +150,44 @@ class TranscriptionEngine:
         model = self._models[model_id]
         logger.info(f"Transcribing {audio_path.name} with model {model_id.value}")
 
-        # Load audio
-        audio = whisperx.load_audio(str(audio_path))
-
-        # Transcribe
+        # Transcribe with faster-whisper
         transcribe_options: dict[str, Any] = {
-            "batch_size": batch_size,
             "beam_size": beam_size,
+            "word_timestamps": word_timestamps,
+            "vad_filter": vad_filter,
         }
         if language:
             transcribe_options["language"] = language
         if initial_prompt:
             transcribe_options["initial_prompt"] = initial_prompt
+        if vad_parameters:
+            transcribe_options["vad_parameters"] = vad_parameters
 
-        result = model.transcribe(audio, **transcribe_options)
+        segments_generator, info = model.transcribe(str(audio_path), **transcribe_options)
 
-        detected_language = result.get("language", "en")
-        language_prob = result.get("language_probability", 1.0)
-
-        # Align for word-level timestamps
-        if word_timestamps:
-            try:
-                align_model, align_metadata = whisperx.load_align_model(
-                    language_code=detected_language,
-                    device=self._device,
-                )
-                result = whisperx.align(
-                    result["segments"],
-                    align_model,
-                    align_metadata,
-                    audio,
-                    self._device,
-                    return_char_alignments=False,
-                )
-            except Exception as e:
-                logger.warning(f"Word alignment failed: {e}")
-                # Continue without word-level timestamps
-
-        # Convert to our schema
+        # Convert generator to list and build result
         segments = []
         full_text_parts = []
 
-        for i, seg in enumerate(result.get("segments", [])):
+        for i, seg in enumerate(segments_generator):
             words = []
-            if "words" in seg:
-                for w in seg["words"]:
+            if word_timestamps and seg.words:
+                for w in seg.words:
                     words.append(
                         WordTimestamp(
-                            word=w.get("word", ""),
-                            start=w.get("start", 0.0),
-                            end=w.get("end", 0.0),
-                            confidence=w.get("score", 1.0),
+                            word=w.word,
+                            start=w.start,
+                            end=w.end,
+                            confidence=w.probability,
                         )
                     )
 
             segment = TranscriptSegment(
                 id=i,
-                start=seg.get("start", 0.0),
-                end=seg.get("end", 0.0),
-                text=seg.get("text", "").strip(),
-                confidence=seg.get("score", 1.0) if "score" in seg else 1.0,
+                start=seg.start,
+                end=seg.end,
+                text=seg.text.strip(),
+                confidence=seg.avg_logprob if hasattr(seg, 'avg_logprob') else 1.0,
                 words=words,
             )
             segments.append(segment)
@@ -228,8 +197,8 @@ class TranscriptionEngine:
         duration = segments[-1].end if segments else 0.0
 
         return TranscriptionResult(
-            language=detected_language,
-            language_probability=language_prob,
+            language=info.language,
+            language_probability=info.language_probability,
             duration=duration,
             segments=segments,
             text=" ".join(full_text_parts),

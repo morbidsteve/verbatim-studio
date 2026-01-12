@@ -136,6 +136,36 @@ async def get_current_active_admin(current_user: User = Depends(get_current_user
     return current_user
 
 
+async def get_user_from_token(
+    token: str,
+    db: AsyncSession
+) -> User:
+    """Validate a token and return the user. Used for media streaming."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+        user_id: str = payload.get("sub")
+        token_type: str = payload.get("type")
+
+        if user_id is None or token_type != "access":
+            raise credentials_exception
+
+    except JWTError:
+        raise credentials_exception
+
+    user = await get_user_by_id(db, user_id)
+    if user is None:
+        raise credentials_exception
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+
+    return user
+
+
 # API Endpoints
 @router.post("/register", response_model=UserWithToken)
 async def register(user_data: UserRegister, db: AsyncSession = Depends(get_db)):

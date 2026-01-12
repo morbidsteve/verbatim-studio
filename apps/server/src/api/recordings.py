@@ -1,19 +1,26 @@
 """Recording API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 import uuid
 import os
 import aiofiles
+import mimetypes
+import httpx
+import logging
 
 from src.config import settings
-from src.database.connection import get_db
-from src.database.models import Recording, Project, TranscriptionStatus, User
-from src.api.auth import get_current_user
+from src.database.connection import get_db, AsyncSessionLocal
+from src.database.models import Recording, Project, TranscriptionStatus, User, Transcript, TranscriptSegment
+from src.api.auth import get_current_user, get_user_from_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -333,9 +340,148 @@ async def delete_recording(
     return {"message": "Recording deleted successfully"}
 
 
+async def update_transcription_progress(db: AsyncSession, recording_id: str, progress: int):
+    """Update transcription progress in database."""
+    result = await db.execute(
+        select(Recording).where(Recording.id == recording_id)
+    )
+    recording = result.scalar_one_or_none()
+    if recording:
+        recording.transcription_progress = progress
+        recording.updated_at = datetime.utcnow()
+        await db.commit()
+
+
+async def process_transcription(
+    recording_id: str,
+    storage_path: str,
+    model: str,
+    language: Optional[str],
+):
+    """Background task to process transcription via WhisperX service."""
+    async with AsyncSessionLocal() as db:
+        try:
+            logger.info(f"Starting transcription for recording {recording_id}")
+
+            # Update progress: Starting
+            await update_transcription_progress(db, recording_id, 10)
+
+            # Send file to WhisperX service
+            async with httpx.AsyncClient(timeout=600.0) as client:  # 10 min timeout for long files
+                # Update progress: Sending to service
+                await update_transcription_progress(db, recording_id, 20)
+
+                # Read the audio file
+                with open(storage_path, "rb") as audio_file:
+                    files = {"file": (os.path.basename(storage_path), audio_file, "audio/mpeg")}
+                    data = {
+                        "model": model,
+                        "word_timestamps": "true",
+                        "vad_filter": "true",
+                    }
+                    if language:
+                        data["language"] = language
+
+                    logger.info(f"Sending request to WhisperX service: {settings.whisper_service_url}/transcribe/sync")
+
+                    # Update progress: Transcribing
+                    await update_transcription_progress(db, recording_id, 40)
+
+                    response = await client.post(
+                        f"{settings.whisper_service_url}/transcribe/sync",
+                        files=files,
+                        data=data,
+                    )
+
+            # Update progress: Processing response
+            await update_transcription_progress(db, recording_id, 80)
+
+            if response.status_code != 200:
+                raise Exception(f"WhisperX service error: {response.status_code} - {response.text}")
+
+            result = response.json()
+            logger.info(f"Transcription completed, {len(result.get('segments', []))} segments")
+
+            # Get the recording from DB
+            db_result = await db.execute(
+                select(Recording).where(Recording.id == recording_id)
+            )
+            recording = db_result.scalar_one_or_none()
+
+            if not recording:
+                logger.error(f"Recording {recording_id} not found after transcription")
+                return
+
+            # Create transcript record
+            transcript_id = str(uuid.uuid4())
+            transcript = Transcript(
+                id=transcript_id,
+                recording_id=recording_id,
+                full_text=result.get("text", ""),
+                language=result.get("language", "en"),
+                model_used=model,
+                word_count=len(result.get("text", "").split()),
+                speaker_count=len(set(seg.get("speaker") for seg in result.get("segments", []) if seg.get("speaker"))),
+                confidence=result.get("language_probability", 0.0),
+            )
+            db.add(transcript)
+
+            # Create segment records
+            for idx, seg in enumerate(result.get("segments", [])):
+                segment = TranscriptSegment(
+                    id=str(uuid.uuid4()),
+                    transcript_id=transcript_id,
+                    segment_index=idx,
+                    speaker_id=seg.get("speaker") or f"speaker_0",
+                    text=seg.get("text", ""),
+                    start_time=seg.get("start", 0),
+                    end_time=seg.get("end", 0),
+                    confidence=seg.get("confidence", 0.0),
+                    words_json=[
+                        {
+                            "word": w.get("word", ""),
+                            "start_time": w.get("start", 0),
+                            "end_time": w.get("end", 0),
+                            "confidence": w.get("confidence", 1.0),
+                        }
+                        for w in seg.get("words", [])
+                    ] if seg.get("words") else None,
+                )
+                db.add(segment)
+
+            # Update progress: Saving
+            await update_transcription_progress(db, recording_id, 90)
+
+            # Update recording status
+            recording.transcription_status = TranscriptionStatus.COMPLETED
+            recording.transcription_progress = 100
+            recording.duration = int(result.get("duration", 0) * 1000)  # Convert to milliseconds
+            recording.updated_at = datetime.utcnow()
+
+            await db.commit()
+            logger.info(f"Transcription saved for recording {recording_id}")
+
+        except Exception as e:
+            logger.error(f"Transcription failed for recording {recording_id}: {e}")
+
+            # Update recording status to failed
+            try:
+                db_result = await db.execute(
+                    select(Recording).where(Recording.id == recording_id)
+                )
+                recording = db_result.scalar_one_or_none()
+                if recording:
+                    recording.transcription_status = TranscriptionStatus.FAILED
+                    recording.updated_at = datetime.utcnow()
+                    await db.commit()
+            except Exception as commit_error:
+                logger.error(f"Failed to update recording status: {commit_error}")
+
+
 @router.post("/{recording_id}/transcribe")
 async def start_transcription(
     recording_id: str,
+    background_tasks: BackgroundTasks,
     model: str = Query("small", description="Whisper model size"),
     language: Optional[str] = Query(None, description="Language code"),
     diarize: bool = Query(True, description="Enable speaker diarization"),
@@ -364,7 +510,14 @@ async def start_transcription(
 
     await db.commit()
 
-    # TODO: Queue transcription job with Celery
+    # Start background transcription task
+    background_tasks.add_task(
+        process_transcription,
+        recording_id=recording_id,
+        storage_path=recording.storage_path,
+        model=model,
+        language=language,
+    )
 
     return {
         "message": "Transcription started",
@@ -398,3 +551,197 @@ async def get_transcription_status(
         "status": recording.transcription_status.value,
         "progress": recording.transcription_progress,
     }
+
+
+# Speaker colors for visualization
+SPEAKER_COLORS = [
+    "#3B82F6",  # blue
+    "#22C55E",  # green
+    "#A855F7",  # purple
+    "#F97316",  # orange
+    "#EC4899",  # pink
+    "#06B6D4",  # cyan
+    "#EAB308",  # yellow
+    "#EF4444",  # red
+]
+
+
+def get_speaker_color(index: int) -> str:
+    """Get a color for a speaker based on index."""
+    return SPEAKER_COLORS[index % len(SPEAKER_COLORS)]
+
+
+class WordTimestamp(BaseModel):
+    word: str
+    start_time: float
+    end_time: float
+    confidence: float
+
+
+class TranscriptSegmentResponse(BaseModel):
+    id: str
+    index: int
+    speaker_id: str
+    text: str
+    start_time: int  # milliseconds
+    end_time: int  # milliseconds
+    confidence: float
+    words: List[WordTimestamp]
+    is_edited: bool
+
+
+class SpeakerResponse(BaseModel):
+    id: str
+    name: Optional[str]
+    color: str
+
+
+class TranscriptResponse(BaseModel):
+    id: str
+    recording_id: str
+    language: str
+    segments: List[TranscriptSegmentResponse]
+    speakers: List[SpeakerResponse]
+    model: str
+    model_version: str
+    processing_time: int
+    word_count: int
+    character_count: int
+    average_confidence: float
+    created_at: str
+    updated_at: str
+
+
+@router.get("/{recording_id}/transcript", response_model=TranscriptResponse)
+async def get_transcript(
+    recording_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get transcript for a recording."""
+    result = await db.execute(
+        select(Recording)
+        .options(
+            selectinload(Recording.project),
+            selectinload(Recording.transcript).selectinload(Transcript.segments),
+        )
+        .where(Recording.id == recording_id)
+    )
+    recording = result.scalar_one_or_none()
+
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    # Verify access
+    if recording.project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not recording.transcript:
+        raise HTTPException(status_code=404, detail="No transcript found for this recording")
+
+    transcript = recording.transcript
+
+    # Build segments response
+    segments = []
+    speaker_ids = set()
+    speaker_names = {}
+
+    for seg in sorted(transcript.segments, key=lambda s: s.segment_index):
+        speaker_id = seg.speaker_id or "speaker_0"
+        speaker_ids.add(speaker_id)
+        if seg.speaker_name:
+            speaker_names[speaker_id] = seg.speaker_name
+
+        words = seg.words_json or []
+
+        segments.append(
+            TranscriptSegmentResponse(
+                id=seg.id,
+                index=seg.segment_index,
+                speaker_id=speaker_id,
+                text=seg.text,
+                start_time=int(seg.start_time * 1000),
+                end_time=int(seg.end_time * 1000),
+                confidence=seg.confidence,
+                words=[
+                    WordTimestamp(
+                        word=w.get("word", ""),
+                        start_time=w.get("start_time", 0),
+                        end_time=w.get("end_time", 0),
+                        confidence=w.get("confidence", 0),
+                    )
+                    for w in words
+                ],
+                is_edited=seg.updated_at > seg.created_at,
+            )
+        )
+
+    # Build speakers list
+    speakers = []
+    for idx, speaker_id in enumerate(sorted(speaker_ids)):
+        speakers.append(
+            SpeakerResponse(
+                id=speaker_id,
+                name=speaker_names.get(speaker_id),
+                color=get_speaker_color(idx),
+            )
+        )
+
+    return TranscriptResponse(
+        id=transcript.id,
+        recording_id=recording.id,
+        language=transcript.language,
+        segments=segments,
+        speakers=speakers,
+        model=transcript.model_used or "unknown",
+        model_version="1.0",
+        processing_time=0,
+        word_count=transcript.word_count,
+        character_count=len(transcript.full_text),
+        average_confidence=transcript.confidence,
+        created_at=transcript.created_at.isoformat(),
+        updated_at=transcript.updated_at.isoformat(),
+    )
+
+
+@router.get("/{recording_id}/media")
+async def get_media(
+    recording_id: str,
+    token: str = Query(..., description="Auth token for streaming"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream the media file for a recording.
+
+    Uses token as query parameter since HTML audio/video elements can't set headers.
+    """
+    # Authenticate via token query parameter
+    current_user = await get_user_from_token(token, db)
+
+    result = await db.execute(
+        select(Recording)
+        .options(selectinload(Recording.project))
+        .where(Recording.id == recording_id)
+    )
+    recording = result.scalar_one_or_none()
+
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    # Verify access
+    if recording.project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check file exists
+    if not os.path.exists(recording.storage_path):
+        raise HTTPException(status_code=404, detail="Media file not found")
+
+    # Determine content type
+    content_type, _ = mimetypes.guess_type(recording.storage_path)
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    return FileResponse(
+        recording.storage_path,
+        media_type=content_type,
+        filename=f"{recording.name}.{recording.format}",
+    )
