@@ -71,6 +71,7 @@ function getEnhancedPath(): string {
 async function execAsync(command: string, options: ExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
   const enhancedOptions: ExecOptions = {
     ...options,
+    encoding: 'utf-8' as BufferEncoding,
     env: {
       ...process.env,
       ...options.env,
@@ -78,7 +79,11 @@ async function execAsync(command: string, options: ExecOptions = {}): Promise<{ 
     },
   };
 
-  return execAsyncRaw(command, enhancedOptions);
+  const result = await execAsyncRaw(command, enhancedOptions);
+  return {
+    stdout: result.stdout?.toString() ?? '',
+    stderr: result.stderr?.toString() ?? '',
+  };
 }
 
 // ============================================================================
