@@ -53,5 +53,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
   shell: {
     openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
     openPath: (path) => ipcRenderer.invoke("shell:openPath", path)
+  },
+  // Docker operations
+  docker: {
+    getStatus: () => ipcRenderer.invoke("docker:getStatus"),
+    checkInstalled: () => ipcRenderer.invoke("docker:checkInstalled"),
+    checkRunning: () => ipcRenderer.invoke("docker:checkRunning"),
+    startDocker: () => ipcRenderer.invoke("docker:startDocker"),
+    openDownloadPage: () => ipcRenderer.invoke("docker:openDownloadPage"),
+    startServices: () => ipcRenderer.invoke("docker:startServices"),
+    stopServices: () => ipcRenderer.invoke("docker:stopServices"),
+    restartServices: () => ipcRenderer.invoke("docker:restartServices"),
+    healthCheck: () => ipcRenderer.invoke("docker:healthCheck"),
+    getLogs: (service) => ipcRenderer.invoke("docker:getLogs", service),
+    ensureReady: () => ipcRenderer.invoke("docker:ensureReady"),
+    onStatusChange: (callback) => {
+      const listener = (_event, status) => callback(status);
+      ipcRenderer.on("docker:statusChange", listener);
+      return () => ipcRenderer.removeListener("docker:statusChange", listener);
+    }
   }
 });
