@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Verbatim Studio Desktop Application",
-  "author": "Verbatim Studio",
+  "author": {
+    "name": "Verbatim Studio",
+    "email": "support@verbatim-studio.com"
+  },
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
