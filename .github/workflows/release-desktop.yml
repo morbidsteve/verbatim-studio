@@ -64,9 +64,7 @@ jobs:
 
       - name: Build Electron app
         working-directory: apps/desktop
-        run: pnpm build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm build:vite && npx electron-builder --publish never
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'mac'
