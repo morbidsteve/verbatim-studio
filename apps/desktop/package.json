@@ -59,6 +59,12 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "resources/docker-compose.yml",
+        "to": "docker-compose.yml"
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
